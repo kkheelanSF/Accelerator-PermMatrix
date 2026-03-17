@@ -1,0 +1,17 @@
+{
+  "manifest_version": 0,
+  "name": "Salesforce Permission Checker",
+  "version": "1.0",
+  "description": "Quickly view effective Salesforce permissions.",
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "permissions": [
+    "activeTab",
+    "cookies"
+  ],
+  "host_permissions": [
+    "*://*.salesforce.com/*",
+    "*://*.force.com/*"
+  ]
+}
