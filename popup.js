@@ -10,14 +10,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const userName = usernameInput.value;
       const selectedObject = sobjectList.value;
 
-      if (!userName) {
-        setStatus('Please enter a user name.');
-        return;
-      }
-      if (!selectedObject) {
-        setStatus('Please select an SObject.');
-        return;
-      }
+      if (!userName) { setStatus('Please enter a user name.'); return; }
+      if (!selectedObject) { setStatus('Please select an SObject.'); return; }
       
       setStatus('Checking...');
       getSalesforceSession(userName, selectedObject);
@@ -28,6 +22,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setupHoverListeners();
 });
 
+// --- ROBUST SESSION LOGIC ---
 async function getAuthInfo() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab) throw new Error("No active tab found.");
@@ -40,29 +35,21 @@ async function getAuthInfo() {
       '.my.salesforce.com', '.sandbox.my.salesforce.com', '.visual.force.com'
   ].some(domain => currentHost.endsWith(domain));
 
-  if (!isValidSalesforcePage) {
-      throw new Error('Please run this extension on a Salesforce page.');
-  }
+  if (!isValidSalesforcePage) throw new Error('Please run this extension on a Salesforce page.');
   
   let sessionCookie = await chrome.cookies.get({ url: currentOrigin, name: 'sid' });
-  if (sessionCookie) {
-      return { domain: currentOrigin, sessionId: sessionCookie.value };
-  }
+  if (sessionCookie) return { domain: currentOrigin, sessionId: sessionCookie.value };
 
   let apiHost = currentHost.includes('.lightning.force.com') 
       ? currentHost.replace('.lightning.force.com', '.my.salesforce.com').replace('--c', '')
       : currentHost;
   
   const salesforceDomain = `https://${apiHost}`;
-  
   if (salesforceDomain !== currentOrigin) {
       sessionCookie = await chrome.cookies.get({ url: salesforceDomain, name: 'sid' });
   }
 
-  if (!sessionCookie) {
-      throw new Error(`Session cookie not found at ${salesforceDomain}. Check manifest.`);
-  }
-
+  if (!sessionCookie) throw new Error(`Session cookie not found. Check manifest.`);
   return { domain: salesforceDomain, sessionId: sessionCookie.value };
 }
 
@@ -85,9 +72,7 @@ async function populateSObjectList() {
         sobjectList.appendChild(option);
       }
     });
-    
     setStatus('Ready.');
-
   } catch (error) {
     console.error('Failed to populate SObject list:', error);
     setStatus(`Error: ${error.message}`);
@@ -114,61 +99,86 @@ async function fetchUserPermissions(domain, sessionId, userName, selectedObject)
   fieldSourceData.clear(); 
 
   try {
-    
+    // 1. Get User & Profile ID
     const escapedUserName = userName.replace(/'/g, "\\'");
-    const userQuery = `SELECT Id, Name FROM User WHERE Username = '${escapedUserName}' OR Name = '${escapedUserName}' LIMIT 1`;
+    const userQuery = `SELECT Id, Name, ProfileId FROM User WHERE Username = '${escapedUserName}' OR Name = '${escapedUserName}' LIMIT 1`;
     const userResponse = await runDataQuery(domain, sessionId, userQuery);
     
     if (!userResponse.records || userResponse.records.length === 0) {
-      setStatus(`Error: User not found with name or username '${userName}'.`);
+      setStatus(`Error: User not found with name '${userName}'.`);
       return;
     }
     const userId = userResponse.records[0].Id;
+    const profileId = userResponse.records[0].ProfileId;
     const foundName = userResponse.records[0].Name;
+
+    // 2. Identify Assignments & Build Group Lineage Map
+    const targetPermSetIds = new Set();
+    const groupIds = new Set();
+    const directPermSetIds = new Set(); 
+    const psIdToGroups = new Map(); 
 
     const assignQuery = `SELECT PermissionSetId, PermissionSetGroupId FROM PermissionSetAssignment WHERE AssigneeId = '${userId}'`;
     const assignRecords = (await runDataQuery(domain, sessionId, assignQuery)).records;
 
-    const directPermSetIds = new Set();
-    const groupIds = new Set();
-
     assignRecords.forEach(a => {
-        if (a.PermissionSetGroupId) groupIds.add(a.PermissionSetGroupId);
-        if (a.PermissionSetId) directPermSetIds.add(a.PermissionSetId);
+        if (a.PermissionSetGroupId) {
+            groupIds.add(a.PermissionSetGroupId);
+        } else if (a.PermissionSetId) {
+            directPermSetIds.add(a.PermissionSetId);
+            targetPermSetIds.add(a.PermissionSetId);
+        }
     });
 
-    
     if (groupIds.size > 0) {
         const groupList = Array.from(groupIds).map(id => `'${id}'`).join(',');
-        const groupCompQuery = `SELECT PermissionSetId FROM PermissionSetGroupComponent WHERE PermissionSetGroupId IN (${groupList})`;
+        
+        const groupQuery = `SELECT Id, MasterLabel FROM PermissionSetGroup WHERE Id IN (${groupList})`;
+        const groupRecords = (await runDataQuery(domain, sessionId, groupQuery)).records;
+        const groupNamesMap = new Map(groupRecords.map(g => [g.Id, g.MasterLabel]));
+
+        const groupCompQuery = `SELECT PermissionSetId, PermissionSetGroupId FROM PermissionSetGroupComponent WHERE PermissionSetGroupId IN (${groupList})`;
         const compRecords = (await runDataQuery(domain, sessionId, groupCompQuery)).records;
-        compRecords.forEach(c => directPermSetIds.add(c.PermissionSetId));
+        
+        compRecords.forEach(c => {
+            targetPermSetIds.add(c.PermissionSetId); 
+            if (!psIdToGroups.has(c.PermissionSetId)) psIdToGroups.set(c.PermissionSetId, []);
+            
+            const groupName = groupNamesMap.get(c.PermissionSetGroupId);
+            if (groupName) psIdToGroups.get(c.PermissionSetId).push(groupName);
+        });
     }
 
-    if (directPermSetIds.size === 0) {
-        setStatus(`No permission sets assigned to ${foundName}.`);
+    if (profileId) {
+        const profilePermSetQuery = `SELECT Id FROM PermissionSet WHERE ProfileId = '${profileId}' LIMIT 1`;
+        const profilePermSetRecords = (await runDataQuery(domain, sessionId, profilePermSetQuery)).records;
+        if (profilePermSetRecords.length > 0) targetPermSetIds.add(profilePermSetRecords[0].Id);
+    }
+
+    if (targetPermSetIds.size === 0) {
+        setStatus(`No permissions found for ${foundName}.`);
         return;
     }
 
-    
-    const targetIds = Array.from(directPermSetIds).map(id => `'${id}'`).join(',');
+    // 3. Query Permissions + NEW: FieldDefinition Query for Setup IDs
+    const targetIds = Array.from(targetPermSetIds).map(id => `'${id}'`).join(',');
 
-    
-    const objectPermQuery = `SELECT PermissionsCreate, PermissionsRead, PermissionsEdit, PermissionsDelete, PermissionsViewAllRecords, PermissionsModifyAllRecords FROM ObjectPermissions WHERE SobjectType = '${selectedObject}' AND ParentId IN (${targetIds})`;
-    
-    
-    const fieldPermQuery = `SELECT Field, PermissionsRead, PermissionsEdit, Parent.Label, Parent.IsOwnedByProfile, Parent.Profile.Name FROM FieldPermissions WHERE SObjectType = '${selectedObject}' AND ParentId IN (${targetIds})`;
-    
+    const objectPermQuery = `SELECT ParentId, PermissionsCreate, PermissionsRead, PermissionsEdit, PermissionsDelete, PermissionsViewAllRecords, PermissionsModifyAllRecords FROM ObjectPermissions WHERE SobjectType = '${selectedObject}' AND ParentId IN (${targetIds})`;
+    const fieldPermQuery = `SELECT ParentId, Field, PermissionsRead, PermissionsEdit, Parent.Label, Parent.IsOwnedByProfile, Parent.Profile.Name FROM FieldPermissions WHERE SObjectType = '${selectedObject}' AND ParentId IN (${targetIds})`;
     const describeUrl = `${domain}/services/data/v58.0/sobjects/${selectedObject}/describe`;
-
     
-    const [objectPermData, fieldPermData, describeData] = await Promise.all([
+    // THE FIX: Grab the true Durable IDs for the Setup URL hop
+    const fieldDefQuery = `SELECT QualifiedApiName, DurableId FROM FieldDefinition WHERE EntityDefinition.QualifiedApiName = '${selectedObject}'`;
+
+    // Execute everything in Parallel
+    const [objectPermData, fieldPermData, describeData, fieldDefData] = await Promise.all([
       runDataQuery(domain, sessionId, objectPermQuery),
       runDataQuery(domain, sessionId, fieldPermQuery),
-      robustFetch(describeUrl, sessionId)
+      robustFetch(describeUrl, sessionId),
+      runDataQuery(domain, sessionId, fieldDefQuery)
     ]);
 
-    
+    // 4. Process Metadata & Field IDs
     const fieldMetadataMap = new Map();
     if (describeData.fields) { 
         for (const field of describeData.fields) { 
@@ -176,6 +186,20 @@ async function fetchUserPermissions(domain, sessionId, userName, selectedObject)
         } 
     }
 
+    // THE FIX: Build the Setup ID Dictionary
+    const fieldIdMap = new Map();
+    if (fieldDefData.records) {
+        for (const record of fieldDefData.records) {
+            let setupId = record.QualifiedApiName; // Fallback to API Name
+            // DurableId looks like "01I...00N...". We split it to extract just the 00N Field ID
+            if (record.DurableId && record.DurableId.includes('.')) {
+                setupId = record.DurableId.split('.')[1]; 
+            }
+            fieldIdMap.set(record.QualifiedApiName, setupId);
+        }
+    }
+
+    // 5. Aggregate Object Permissions
     const effectiveObjectPerms = { Create: false, Read: false, Edit: false, Delete: false, ViewAll: false, ModifyAll: false };
     if (objectPermData.records) { 
         for (const record of objectPermData.records) { 
@@ -188,6 +212,7 @@ async function fetchUserPermissions(domain, sessionId, userName, selectedObject)
         } 
     }
 
+    // 6. Aggregate Field Permissions & Format Lineage
     const effectiveFieldPerms = new Map();
     if (fieldPermData.records) {
       for (const record of fieldPermData.records) {
@@ -199,9 +224,24 @@ async function fetchUserPermissions(domain, sessionId, userName, selectedObject)
         
         if (!fieldSourceData.has(fieldName)) { fieldSourceData.set(fieldName, []); }
         
-        const sourceName = record.Parent.IsOwnedByProfile && record.Parent.Profile 
-            ? record.Parent.Profile.Name 
-            : record.Parent.Label;
+        // Advanced Lineage Formatting
+        let sourceName = '';
+        if (record.Parent.IsOwnedByProfile) {
+            sourceName = `Profile: ${record.Parent.Profile ? record.Parent.Profile.Name : record.Parent.Label}`;
+        } else {
+            const inGroup = psIdToGroups.has(record.ParentId);
+            const isDirect = directPermSetIds.has(record.ParentId);
+
+            if (inGroup && isDirect) {
+                const groupNames = psIdToGroups.get(record.ParentId).join(', ');
+                sourceName = `Group: ${groupNames} + Direct ➔ ${record.Parent.Label}`;
+            } else if (inGroup) {
+                const groupNames = psIdToGroups.get(record.ParentId).join(', ');
+                sourceName = `Group: ${groupNames} ➔ ${record.Parent.Label}`;
+            } else {
+                sourceName = `Perm Set: ${record.Parent.Label}`;
+            }
+        }
 
         fieldSourceData.get(fieldName).push({ 
             name: sourceName, 
@@ -212,9 +252,8 @@ async function fetchUserPermissions(domain, sessionId, userName, selectedObject)
       }
     }
 
-    
+    // 7. Render UI
     setStatus(`Effective Permissions for ${foundName} on ${selectedObject}:`);
-    
     
     objectResultsDiv.innerHTML = `
     <div class="object-perms-row">
@@ -235,7 +274,9 @@ async function fetchUserPermissions(domain, sessionId, userName, selectedObject)
       const metadata = fieldMetadataMap.get(fieldName);
       const isEditModifiable = metadata ? metadata.isUpdateable : true;
       
-      const fieldSetupUrl = `${domain}/lightning/setup/ObjectManager/${selectedObject}/FieldsAndRelationships/${fieldName}/view`;
+      // THE FIX: Use the resolved Setup ID instead of the plain API name
+      const setupId = fieldIdMap.get(fieldName) || fieldName;
+      const fieldSetupUrl = `${domain}/lightning/setup/ObjectManager/${selectedObject}/FieldsAndRelationships/${setupId}/view`;
       
       fieldHtml += `<tr>
         <td>
@@ -257,6 +298,7 @@ async function fetchUserPermissions(domain, sessionId, userName, selectedObject)
 }
 
 // --- HELPER FUNCTIONS ---
+
 async function robustFetch(url, sessionId) {
     const res = await fetch(url, { headers: { 'Authorization': `Bearer ${sessionId}` } });
     if (!res.ok) {
@@ -278,19 +320,11 @@ async function runDataQuery(domain, sessionId, query) {
     let nextUrl = `/services/data/v58.0/query?q=${encodeURIComponent(query)}`;
 
     while (nextUrl) {
-      
         const fullUrl = nextUrl.startsWith('http') ? nextUrl : `${domain}${nextUrl}`;
-        
         const data = await robustFetch(fullUrl, sessionId);
-        
-        if (data.records) {
-            records = [...records, ...data.records];
-        }
-        
-        
+        if (data.records) records = [...records, ...data.records];
         nextUrl = data.nextRecordsUrl;
     }
-    
     return { records: records };
 }
 
@@ -310,33 +344,46 @@ function setupHoverListeners() {
   const popoverBody = document.getElementById('popover-body');
   const fieldResultsDiv = document.getElementById('field-results');
 
-  if (!fieldResultsDiv) return;
+  if (!fieldResultsDiv || !popover) return;
+
+  // Force these styles dynamically so it overrides any HTML/CSS bugs.
+  popover.style.position = 'fixed'; 
+  popover.style.zIndex = '999999';
+  popover.style.pointerEvents = 'none';
 
   fieldResultsDiv.addEventListener('mouseover', (e) => {
-    if (!e.target.classList.contains('source-hover-trigger')) return;
+    const trigger = e.target.closest('.source-hover-trigger');
+    if (!trigger) return;
     
-    const fieldName = e.target.dataset.field;
+    const fieldName = trigger.dataset.field;
     const sources = fieldSourceData.get(fieldName);
-    if (!sources) return;
+    if (!sources || sources.length === 0) return;
     
     popoverTitle.textContent = `Permission Source: ${fieldName}`;
-    let popoverHtml = '<table id="popover-table"><thead><tr><th>Source Name</th><th>Type</th><th>Read</th><th>Edit</th></tr></thead><tbody>';
     
-    sources.sort((a, b) => { 
+    let popoverHtml = '<table id="popover-table"><thead><tr><th>Source</th><th>Read</th><th>Edit</th></tr></thead><tbody>';
+    
+    const sortedSources = [...sources].sort((a, b) => { 
         if (a.isProfile) return -1; 
         if (b.isProfile) return 1; 
-        return a.name.localeCompare(b.name); 
+        return (a.name || '').localeCompare(b.name || ''); 
     });
     
-    for (const source of sources) { 
-        popoverHtml += `<tr><td>${source.name}</td><td>${source.isProfile ? 'Profile' : 'Permission Set'}</td><td>${source.read}</td><td>${source.edit}</td></tr>`; 
+    for (const source of sortedSources) { 
+        popoverHtml += `<tr><td>${source.name}</td><td>${source.read ? 'Yes' : 'No'}</td><td>${source.edit ? 'Yes' : 'No'}</td></tr>`; 
     }
     popoverHtml += '</tbody></table>';
     popoverBody.innerHTML = popoverHtml;
     
-    let top = e.clientY + 5;
-    let left = e.clientX + 10;
-    if (left + 350 > window.innerWidth) { left = e.clientX - 360; }
+    let top = e.clientY + 15;
+    let left = e.clientX + 15;
+    
+    if (left + 350 > window.innerWidth) { 
+        left = window.innerWidth - 370; 
+    }
+    if (top + 200 > window.innerHeight) {
+        top = e.clientY - 200; 
+    }
     
     popover.style.left = left + 'px';
     popover.style.top = top + 'px';
@@ -344,7 +391,7 @@ function setupHoverListeners() {
   });
 
   fieldResultsDiv.addEventListener('mouseout', (e) => {
-    if (e.target.classList.contains('source-hover-trigger')) {
+    if (e.target.closest('.source-hover-trigger')) {
       popover.style.display = 'none';
     }
   });
