@@ -1,4 +1,3 @@
-// Global variable to cache our source data
 let fieldSourceData = new Map();
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -22,7 +21,6 @@ document.addEventListener('DOMContentLoaded', () => {
   setupHoverListeners();
 });
 
-// --- ROBUST SESSION LOGIC ---
 async function getAuthInfo() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab) throw new Error("No active tab found.");
@@ -32,25 +30,39 @@ async function getAuthInfo() {
   
   const isValidSalesforcePage = [
       '.lightning.force.com', '.vf.force.com', '.salesforce.com',
-      '.my.salesforce.com', '.sandbox.my.salesforce.com', '.visual.force.com'
+      '.my.salesforce.com', '.sandbox.my.salesforce.com', '.visual.force.com',
+      '.salesforce-setup.com' 
   ].some(domain => currentHost.endsWith(domain));
 
   if (!isValidSalesforcePage) throw new Error('Please run this extension on a Salesforce page.');
   
-  let sessionCookie = await chrome.cookies.get({ url: currentOrigin, name: 'sid' });
-  if (sessionCookie) return { domain: currentOrigin, sessionId: sessionCookie.value };
-
-  let apiHost = currentHost.includes('.lightning.force.com') 
-      ? currentHost.replace('.lightning.force.com', '.my.salesforce.com').replace('--c', '')
-      : currentHost;
+  let apiHost = currentHost;
+  if (currentHost.includes('.sandbox.lightning.force.com')) {
+      apiHost = currentHost.replace('.sandbox.lightning.force.com', '.sandbox.my.salesforce.com');
+  } else if (currentHost.includes('.sandbox.salesforce-setup.com')) {
+      apiHost = currentHost.replace('.sandbox.salesforce-setup.com', '.sandbox.my.salesforce.com');
+  } else if (currentHost.includes('.lightning.force.com')) {
+      apiHost = currentHost.replace('.lightning.force.com', '.my.salesforce.com').replace('--c', '');
+  } else if (currentHost.includes('.salesforce-setup.com')) {
+      apiHost = currentHost.replace('.salesforce-setup.com', '.my.salesforce.com'); 
+  }
   
   const salesforceDomain = `https://${apiHost}`;
-  if (salesforceDomain !== currentOrigin) {
-      sessionCookie = await chrome.cookies.get({ url: salesforceDomain, name: 'sid' });
+
+  let sessionCookie = await chrome.cookies.get({ url: salesforceDomain, name: 'sid' });
+  
+  if (sessionCookie) {
+      console.log('Success: Using API Domain Cookie ->', salesforceDomain);
+      return { domain: salesforceDomain, sessionId: sessionCookie.value };
   }
 
-  if (!sessionCookie) throw new Error(`Session cookie not found. Check manifest.`);
-  return { domain: salesforceDomain, sessionId: sessionCookie.value };
+  sessionCookie = await chrome.cookies.get({ url: currentOrigin, name: 'sid' });
+  if (sessionCookie) {
+      console.log('Warning: Falling back to UI Domain Cookie ->', currentOrigin);
+      return { domain: currentOrigin, sessionId: sessionCookie.value };
+  }
+
+  throw new Error(`Session cookie not found. Please log out of Salesforce and log back in.`);
 }
 
 async function populateSObjectList() {
@@ -99,7 +111,6 @@ async function fetchUserPermissions(domain, sessionId, userName, selectedObject)
   fieldSourceData.clear(); 
 
   try {
-    // 1. Get User & Profile ID
     const escapedUserName = userName.replace(/'/g, "\\'");
     const userQuery = `SELECT Id, Name, ProfileId FROM User WHERE Username = '${escapedUserName}' OR Name = '${escapedUserName}' LIMIT 1`;
     const userResponse = await runDataQuery(domain, sessionId, userQuery);
@@ -112,7 +123,6 @@ async function fetchUserPermissions(domain, sessionId, userName, selectedObject)
     const profileId = userResponse.records[0].ProfileId;
     const foundName = userResponse.records[0].Name;
 
-    // 2. Identify Assignments & Build Group Lineage Map
     const targetPermSetIds = new Set();
     const groupIds = new Set();
     const directPermSetIds = new Set(); 
@@ -160,17 +170,14 @@ async function fetchUserPermissions(domain, sessionId, userName, selectedObject)
         return;
     }
 
-    // 3. Query Permissions + NEW: FieldDefinition Query for Setup IDs
     const targetIds = Array.from(targetPermSetIds).map(id => `'${id}'`).join(',');
 
     const objectPermQuery = `SELECT ParentId, PermissionsCreate, PermissionsRead, PermissionsEdit, PermissionsDelete, PermissionsViewAllRecords, PermissionsModifyAllRecords FROM ObjectPermissions WHERE SobjectType = '${selectedObject}' AND ParentId IN (${targetIds})`;
     const fieldPermQuery = `SELECT ParentId, Field, PermissionsRead, PermissionsEdit, Parent.Label, Parent.IsOwnedByProfile, Parent.Profile.Name FROM FieldPermissions WHERE SObjectType = '${selectedObject}' AND ParentId IN (${targetIds})`;
     const describeUrl = `${domain}/services/data/v58.0/sobjects/${selectedObject}/describe`;
     
-    // THE FIX: Grab the true Durable IDs for the Setup URL hop
     const fieldDefQuery = `SELECT QualifiedApiName, DurableId FROM FieldDefinition WHERE EntityDefinition.QualifiedApiName = '${selectedObject}'`;
 
-    // Execute everything in Parallel
     const [objectPermData, fieldPermData, describeData, fieldDefData] = await Promise.all([
       runDataQuery(domain, sessionId, objectPermQuery),
       runDataQuery(domain, sessionId, fieldPermQuery),
@@ -178,7 +185,6 @@ async function fetchUserPermissions(domain, sessionId, userName, selectedObject)
       runDataQuery(domain, sessionId, fieldDefQuery)
     ]);
 
-    // 4. Process Metadata & Field IDs
     const fieldMetadataMap = new Map();
     if (describeData.fields) { 
         for (const field of describeData.fields) { 
@@ -186,12 +192,10 @@ async function fetchUserPermissions(domain, sessionId, userName, selectedObject)
         } 
     }
 
-    // THE FIX: Build the Setup ID Dictionary
     const fieldIdMap = new Map();
     if (fieldDefData.records) {
         for (const record of fieldDefData.records) {
-            let setupId = record.QualifiedApiName; // Fallback to API Name
-            // DurableId looks like "01I...00N...". We split it to extract just the 00N Field ID
+            let setupId = record.QualifiedApiName;
             if (record.DurableId && record.DurableId.includes('.')) {
                 setupId = record.DurableId.split('.')[1]; 
             }
@@ -199,7 +203,6 @@ async function fetchUserPermissions(domain, sessionId, userName, selectedObject)
         }
     }
 
-    // 5. Aggregate Object Permissions
     const effectiveObjectPerms = { Create: false, Read: false, Edit: false, Delete: false, ViewAll: false, ModifyAll: false };
     if (objectPermData.records) { 
         for (const record of objectPermData.records) { 
@@ -212,7 +215,6 @@ async function fetchUserPermissions(domain, sessionId, userName, selectedObject)
         } 
     }
 
-    // 6. Aggregate Field Permissions & Format Lineage
     const effectiveFieldPerms = new Map();
     if (fieldPermData.records) {
       for (const record of fieldPermData.records) {
@@ -224,7 +226,6 @@ async function fetchUserPermissions(domain, sessionId, userName, selectedObject)
         
         if (!fieldSourceData.has(fieldName)) { fieldSourceData.set(fieldName, []); }
         
-        // Advanced Lineage Formatting
         let sourceName = '';
         if (record.Parent.IsOwnedByProfile) {
             sourceName = `Profile: ${record.Parent.Profile ? record.Parent.Profile.Name : record.Parent.Label}`;
@@ -252,7 +253,6 @@ async function fetchUserPermissions(domain, sessionId, userName, selectedObject)
       }
     }
 
-    // 7. Render UI
     setStatus(`Effective Permissions for ${foundName} on ${selectedObject}:`);
     
     objectResultsDiv.innerHTML = `
@@ -274,7 +274,6 @@ async function fetchUserPermissions(domain, sessionId, userName, selectedObject)
       const metadata = fieldMetadataMap.get(fieldName);
       const isEditModifiable = metadata ? metadata.isUpdateable : true;
       
-      // THE FIX: Use the resolved Setup ID instead of the plain API name
       const setupId = fieldIdMap.get(fieldName) || fieldName;
       const fieldSetupUrl = `${domain}/lightning/setup/ObjectManager/${selectedObject}/FieldsAndRelationships/${setupId}/view`;
       
@@ -296,8 +295,6 @@ async function fetchUserPermissions(domain, sessionId, userName, selectedObject)
     console.error('An error occurred:', error);
   }
 }
-
-// --- HELPER FUNCTIONS ---
 
 async function robustFetch(url, sessionId) {
     const res = await fetch(url, { headers: { 'Authorization': `Bearer ${sessionId}` } });
@@ -346,7 +343,6 @@ function setupHoverListeners() {
 
   if (!fieldResultsDiv || !popover) return;
 
-  // Force these styles dynamically so it overrides any HTML/CSS bugs.
   popover.style.position = 'fixed'; 
   popover.style.zIndex = '999999';
   popover.style.pointerEvents = 'none';

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PermMatrix",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "One-click effective permission auditing for Salesforce.",
   "action": {
     "default_popup": "popup.html"
@@ -11,8 +11,8 @@
     "cookies"
   ],
   "host_permissions": [
-    "<all_urls>",
     "*://*.salesforce.com/*",
-    "*://*.force.com/*"
+    "*://*.force.com/*",
+    "*://*.salesforce-setup.com/*"
   ]
 }
