@@ -13,8 +13,32 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!selectedObject) { setStatus('Please select an SObject.'); return; }
       
       setStatus('Checking...');
+      document.getElementById('fieldSearch').style.display = 'none'; // Hide search while loading
       getSalesforceSession(userName, selectedObject);
     });
+  }
+
+  // --- NEW: REAL-TIME SEARCH FILTER ---
+  const fieldSearch = document.getElementById('fieldSearch');
+  if (fieldSearch) {
+      fieldSearch.addEventListener('input', (e) => {
+          const searchTerm = e.target.value.toLowerCase();
+          const table = document.getElementById('field-table');
+          if (!table) return;
+          
+          const rows = table.querySelectorAll('tbody tr');
+          rows.forEach(row => {
+              // Cell 0 is Label, Cell 1 is API Name (we query textContent of both)
+              const labelText = row.cells[0].textContent.toLowerCase();
+              const apiNameText = row.cells[1].textContent.toLowerCase();
+              
+              if (labelText.includes(searchTerm) || apiNameText.includes(searchTerm)) {
+                  row.style.display = '';
+              } else {
+                  row.style.display = 'none';
+              }
+          });
+      });
   }
 
   populateSObjectList();
@@ -185,10 +209,14 @@ async function fetchUserPermissions(domain, sessionId, userName, selectedObject)
       runDataQuery(domain, sessionId, fieldDefQuery)
     ]);
 
+    // --- NEW: Map both Updateable flag AND the real Field Label from Describe ---
     const fieldMetadataMap = new Map();
     if (describeData.fields) { 
         for (const field of describeData.fields) { 
-            fieldMetadataMap.set(field.name, { isUpdateable: field.updateable }); 
+            fieldMetadataMap.set(field.name, { 
+                isUpdateable: field.updateable,
+                label: field.label 
+            }); 
         } 
     }
 
@@ -254,6 +282,8 @@ async function fetchUserPermissions(domain, sessionId, userName, selectedObject)
     }
 
     setStatus(`Effective Permissions for ${foundName} on ${selectedObject}:`);
+    document.getElementById('fieldSearch').style.display = 'block'; // Show search bar now that we have data
+    document.getElementById('fieldSearch').value = ''; // Reset search input
     
     objectResultsDiv.innerHTML = `
     <div class="object-perms-row">
@@ -265,24 +295,36 @@ async function fetchUserPermissions(domain, sessionId, userName, selectedObject)
         <div class="perm-item"><strong>Modify All</strong> ${createCheckbox(effectiveObjectPerms.ModifyAll)}</div>
     </div>`;
 
+    // Sort alphabetically by API Name
     const fieldList = Array.from(effectiveFieldPerms.keys()).sort();
+    
+    // --- NEW: Add Field Label Column to Header ---
     let fieldHtml = '<table id="field-table">';
-    fieldHtml += `<thead><tr><th>Field API Name</th><th>Read</th><th>Edit</th></tr></thead><tbody>`;
+    fieldHtml += `<thead><tr>
+        <th>Field Label</th>
+        <th>API Name</th>
+        <th>Read</th>
+        <th>Edit</th>
+    </tr></thead><tbody>`;
     
     for (const fieldName of fieldList) {
       const perms = effectiveFieldPerms.get(fieldName);
       const metadata = fieldMetadataMap.get(fieldName);
+      
       const isEditModifiable = metadata ? metadata.isUpdateable : true;
+      const displayLabel = metadata && metadata.label ? metadata.label : fieldName; // Fallback to API name if no label found
       
       const setupId = fieldIdMap.get(fieldName) || fieldName;
       const fieldSetupUrl = `${domain}/lightning/setup/ObjectManager/${selectedObject}/FieldsAndRelationships/${setupId}/view`;
       
+      // --- NEW: Render Label in first column, API Name in second ---
       fieldHtml += `<tr>
         <td>
             <a href="${fieldSetupUrl}" target="_blank" class="icon-action setup-gear" title="Open in Setup">⚙️</a>
             <span class="source-hover-trigger icon-action source-info" data-field="${fieldName}" title="View Permission Source">ℹ️</span>
-            <strong>${fieldName}</strong> 
+            <strong>${displayLabel}</strong> 
         </td>
+        <td style="color:#666; font-family:monospace; font-size:12px;">${fieldName}</td>
         <td>${createCheckbox(perms.Read, true)}</td>
         <td>${createCheckbox(perms.Edit, isEditModifiable)}</td>
       </tr>`;

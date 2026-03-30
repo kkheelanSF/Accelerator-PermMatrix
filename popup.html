@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <title>SFDC Permission Checker</title>
   <style>
+    /* ... (keep all your existing CSS) ... */
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       width: 650px;
@@ -101,6 +102,28 @@
     }
     #popover-title { font-weight: bold; margin-bottom: 5px; }
     #popover-table th, #popover-table td { padding: 4px 8px; font-size: 12px; }
+    /* NEW CSS FOR SEARCH BAR */
+    .field-header-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin: 15px 0 10px;
+        border-bottom: 1px solid #eee;
+        padding-bottom: 5px;
+    }
+    .field-header-row .section-title {
+        margin: 0;
+        border-bottom: none;
+        padding-bottom: 0;
+    }
+    #fieldSearch {
+        padding: 6px 10px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 13px;
+        width: 250px;
+        display: none; /* Hidden until data loads */
+    }
   </style>
 </head>
 <body>
@@ -119,7 +142,10 @@
   <div class="section-title">Object Permissions</div>
   <div id="object-results"></div>
 
-  <div class="section-title">Field Permissions</div>
+  <div class="field-header-row">
+      <div class="section-title">Field Permissions</div>
+      <input type="text" id="fieldSearch" placeholder="Search Label or API Name...">
+  </div>
   <div id="field-results"></div>
 
   <div id="popover">
