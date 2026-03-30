@@ -1,151 +1,286 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>SFDC Permission Checker</title>
   <style>
-    /* ... (keep all your existing CSS) ... */
+    /* --- CSS VARIABLES FOR LIGHT/DARK MODE --- */
+    :root {
+      --bg-color: #ffffff;
+      --surface-color: #f3f3f3;
+      --text-main: #080707;
+      --text-muted: #444444;
+      --border-color: #dddbda;
+      --brand-blue: #0176d3;
+      --brand-hover: #014486;
+      --table-header: #fafaf9;
+      --row-hover: #f3f3f3;
+      --icon-color: #747474;
+      --popover-bg: #ffffff;
+      --popover-shadow: rgba(0,0,0,0.16);
+    }
+
+    body.dark-mode {
+      --bg-color: #1b1d1f;
+      --surface-color: #2b2d2f;
+      --text-main: #f3f3f3;
+      --text-muted: #aeaeae;
+      --border-color: #444444;
+      --brand-blue: #5eb4ff;
+      --brand-hover: #0176d3;
+      --table-header: #222426;
+      --row-hover: #2b2d2f;
+      --icon-color: #a0aab4;
+      --popover-bg: #2b2d2f;
+      --popover-shadow: rgba(0,0,0,0.5);
+    }
+
+    /* --- BASE STYLES --- */
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      width: 650px;
-      padding: 15px;
-      color: #333;
+      width: 700px;
+      margin: 0;
+      padding: 20px;
+      background-color: var(--bg-color);
+      color: var(--text-main);
+      transition: background-color 0.2s, color 0.2s;
     }
-    h2 { margin-top: 0; }
-    
-    /* Top Bar Layout */
+
+    /* --- HEADER & THEME TOGGLE --- */
+    .header-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    h2 { 
+      margin: 0; 
+      font-size: 20px; 
+      font-weight: 600;
+    }
+    #themeToggle {
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: var(--icon-color);
+      padding: 6px;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.2s, color 0.2s;
+    }
+    #themeToggle:hover {
+      background: var(--surface-color);
+      color: var(--brand-blue);
+    }
+
+    /* --- CONTROLS --- */
+    /* --- CONTROLS --- */
     .controls {
       display: flex;
-      gap: 10px;
-      margin-bottom: 15px;
+      gap: 12px;
+      margin-bottom: 20px;
       align-items: center;
+      background: var(--surface-color);
+      padding: 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border-color);
+      box-sizing: border-box;
+      width: 100%;
     }
-    input, select {
-      padding: 8px;
-      border: 1px solid #ddd;
+    input[type="text"], select {
+      padding: 0 12px;
+      height: 32px;
+      border: 1px solid var(--border-color);
       border-radius: 4px;
-      flex: 1;
-      min-width: 0; 
+      background-color: var(--bg-color);
+      color: var(--text-main);
+      font-size: 13px;
+      outline: none;
+      box-sizing: border-box;
+      transition: border-color 0.1s, box-shadow 0.1s;
     }
+    input[type="text"]:focus, select:focus {
+      border-color: var(--brand-blue);
+      box-shadow: 0 0 3px var(--brand-blue);
+    }
+    
+    /* The Flexbox Fixes */
+    #username { flex: 1; min-width: 0; }
+    #sobjectList { flex: 1.5; min-width: 0; text-overflow: ellipsis; }
+    
     button {
-      padding: 8px 20px;
-      background-color: #0070d2;
-      color: white;
+      height: 32px;
+      padding: 0 16px;
+      background-color: var(--brand-blue);
+      color: #fff;
       border: none;
       border-radius: 4px;
       cursor: pointer;
-      font-weight: bold;
-      white-space: nowrap; 
-      flex-shrink: 0; 
+      font-size: 13px;
+      font-weight: 500;
+      transition: background-color 0.2s;
+      flex-shrink: 0; /* Prevents the button from being pushed off screen */
     }
-    button:hover { background-color: #005fb2; }
-    
-    #status { margin-bottom: 10px; font-style: italic; color: #666; }
-    
-    /* Results Styling */
-    .section-title { margin: 15px 0 10px; font-weight: bold; border-bottom: 1px solid #eee; padding-bottom: 5px;}
+    button:hover { background-color: var(--brand-hover); }
+
+    #status { margin-bottom: 12px; font-size: 13px; color: var(--text-muted); }
+
+    /* --- RESULTS SECTIONS --- */
+    .section-title { 
+      margin: 24px 0 12px; 
+      font-size: 16px;
+      font-weight: 600; 
+    }
     
     .object-perms-row {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        background-color: #f8f9fa;
-        padding: 10px;
-        border-radius: 4px;
-        border: 1px solid #eee;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background-color: var(--table-header);
+      padding: 12px 16px;
+      border-radius: 4px;
+      border: 1px solid var(--border-color);
     }
     .perm-item {
-        display: flex;
-        align-items: center;
-        gap: 8px; 
-        font-size: 13px;
-    }
-    .perm-item strong {
-        color: #555;
+      display: flex;
+      align-items: center;
+      gap: 8px; 
+      font-size: 13px;
     }
 
-    input[type="checkbox"] { margin: 0; }
-    .checkbox-blue { accent-color: #0070d2; }
+    input[type="checkbox"] { margin: 0; accent-color: var(--brand-blue); }
 
-    /* Table Styling */
-    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-    th, td { padding: 8px; text-align: left; border-bottom: 1px solid #eee; }
-    th { background-color: #f4f6f9; }
+    /* --- NEW FIELD SEARCH --- */
+    /* --- STATUS & SEARCH AREA --- */
+    .status-area {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      min-height: 32px; /* Keeps the row height stable even when search is hidden */
+    }
     
-    /* Icon Styling */
-    #field-table td:first-child {
-        display: flex;
-        align-items: center;
+    #status { 
+      font-size: 13px; 
+      color: var(--text-muted); 
+      font-weight: 500;
+      flex: 1; /* Pushes the search bar to the right */
+    }
+    
+    #fieldSearch {
+      width: 300px;
+      display: none; /* Hidden until data loads */
+    }
+
+    .field-header-row .section-title { margin: 0; }
+    #fieldSearch {
+      width: 350px; /* Proportionate to long API names */
+      display: none; 
+    }
+
+    /* --- TABLE STYLING --- */
+    /* --- TABLE STYLING --- */
+    table { 
+      width: 100%; 
+      border-collapse: collapse; 
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      overflow: hidden;
+      table-layout: fixed; /* CRITICAL: Prevents table from blowing past screen width */
+    }
+    th, td { 
+      padding: 8px 10px; 
+      text-align: left; 
+      border-bottom: 1px solid var(--border-color); 
+      font-size: 13px;
+      vertical-align: middle;
+    }
+    th { 
+      background-color: var(--table-header); 
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+    tr:hover { background-color: var(--row-hover); }
+    
+    .api-name-cell {
+      color: var(--text-muted); 
+      font-family: monospace; 
+      font-size: 11.5px; 
+      word-wrap: break-word; /* Forces long API names to wrap instead of pushing columns */
+    }
+    
+    /* --- SVGs & ACTIONS --- */
+    .action-cell { 
+      display: flex; 
+      align-items: center; 
+      gap: 10px; 
     }
     .icon-action {
-        text-decoration: none;
-        margin-right: 8px;
-        font-size: 1.1em;
-        cursor: pointer;
-        line-height: 1;
+      display: inline-flex;
+      color: var(--icon-color);
+      cursor: pointer;
+      transition: color 0.2s;
     }
-    .setup-gear { color: #777; }
-    .setup-gear:hover { color: #0070d2; }
-    .source-info { color: #0070d2; }
+    .icon-action:hover { color: var(--brand-blue); }
+    .icon-action svg { width: 16px; height: 16px; }
+    /* --- SVGs --- */
+    
+    .icon-action {
+      display: inline-flex;
+      color: var(--icon-color);
+      cursor: pointer;
+      transition: color 0.2s;
+    }
+    .icon-action:hover { color: var(--brand-blue); }
+    .icon-action svg { width: 16px; height: 16px; }
 
-    /* Popover Styling */
+    /* --- POPOVER --- */
     #popover {
       display: none;
       position: fixed;
-      background: white;
-      border: 1px solid #ccc;
-      box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-      padding: 10px;
+      background: var(--popover-bg);
+      border: 1px solid var(--border-color);
+      box-shadow: 0 4px 12px var(--popover-shadow);
+      padding: 12px;
       z-index: 1000;
       border-radius: 4px;
-      max-width: 400px;
+      max-width: 450px;
     }
-    #popover-title { font-weight: bold; margin-bottom: 5px; }
-    #popover-table th, #popover-table td { padding: 4px 8px; font-size: 12px; }
-    /* NEW CSS FOR SEARCH BAR */
-    .field-header-row {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin: 15px 0 10px;
-        border-bottom: 1px solid #eee;
-        padding-bottom: 5px;
-    }
-    .field-header-row .section-title {
-        margin: 0;
-        border-bottom: none;
-        padding-bottom: 0;
-    }
-    #fieldSearch {
-        padding: 6px 10px;
-        border: 1px solid #ddd;
-        border-radius: 4px;
-        font-size: 13px;
-        width: 250px;
-        display: none; /* Hidden until data loads */
-    }
+    #popover-title { font-weight: 600; margin-bottom: 8px; font-size: 13px; }
+    #popover-table th, #popover-table td { padding: 6px 10px; font-size: 12px; border: none; border-bottom: 1px solid var(--border-color); }
+    #popover-table th { background: transparent; }
   </style>
 </head>
 <body>
-  <h2>Permission Checker</h2>
+  
+  <div class="header-bar">
+    <h2>Permission Matrix</h2>
+    <button id="themeToggle" title="Toggle Light/Dark Mode">
+      <svg id="themeIcon" viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+      </svg>
+    </button>
+  </div>
   
   <div class="controls">
-    <input type="text" id="username" placeholder="Enter Username or Name">
+    <input type="text" id="username" placeholder="Search by Name or Username...">
     <select id="sobjectList">
-      <option>Loading...</option>
+      <option>Loading Configuration...</option>
     </select>
     <button id="searchButton">Check</button>
   </div>
   
-  <div id="status"></div>
+  <div class="status-area">
+    <div id="status"></div>
+    <input type="text" id="fieldSearch" placeholder="Search fields by Label or API Name..." autocomplete="off">
+  </div>
 
-  <div class="section-title">Object Permissions</div>
+  <div class="section-title" id="header-object" style="display: none;">Object Permissions</div>
   <div id="object-results"></div>
 
-  <div class="field-header-row">
-      <div class="section-title">Field Permissions</div>
-      <input type="text" id="fieldSearch" placeholder="Search Label or API Name...">
-  </div>
+  <div class="section-title" id="header-field" style="display: none;">Field-Level Security</div>
   <div id="field-results"></div>
 
   <div id="popover">

@@ -1,6 +1,33 @@
 let fieldSourceData = new Map();
 
+// --- THEME TOGGLE LOGIC ---
+const sunIcon = '<circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>';
+const moonIcon = '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>';
+
+function initTheme() {
+    const isDark = localStorage.getItem('permMatrix_darkMode') === 'true';
+    if (isDark) document.body.classList.add('dark-mode');
+    updateThemeIcon();
+
+    document.getElementById('themeToggle').addEventListener('click', () => {
+        document.body.classList.toggle('dark-mode');
+        const isNowDark = document.body.classList.contains('dark-mode');
+        localStorage.setItem('permMatrix_darkMode', isNowDark);
+        updateThemeIcon();
+    });
+}
+
+function updateThemeIcon() {
+    const isDark = document.body.classList.contains('dark-mode');
+    document.getElementById('themeIcon').innerHTML = isDark ? sunIcon : moonIcon;
+}
+
+// --- SVG ICONS FOR ROWS ---
+const gearSVG = `<svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>`;
+const infoSVG = `<svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>`;
+
 document.addEventListener('DOMContentLoaded', () => {
+  initTheme();
   const searchButton = document.getElementById('searchButton');
   if (searchButton) {
     searchButton.addEventListener('click', () => {
@@ -13,7 +40,10 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!selectedObject) { setStatus('Please select an SObject.'); return; }
       
       setStatus('Checking...');
-      document.getElementById('fieldSearch').style.display = 'none'; // Hide search while loading
+      document.getElementById('header-object').style.display = 'none';
+      document.getElementById('header-field').style.display = 'none';
+      document.getElementById('fieldSearch').style.display = 'none'; // Keep input hidden too
+      getSalesforceSession(userName, selectedObject);
       getSalesforceSession(userName, selectedObject);
     });
   }
@@ -29,8 +59,8 @@ document.addEventListener('DOMContentLoaded', () => {
           const rows = table.querySelectorAll('tbody tr');
           rows.forEach(row => {
               // Cell 0 is Label, Cell 1 is API Name (we query textContent of both)
-              const labelText = row.cells[0].textContent.toLowerCase();
-              const apiNameText = row.cells[1].textContent.toLowerCase();
+              const labelText = row.cells[1].textContent.toLowerCase();
+              const apiNameText = row.cells[2].textContent.toLowerCase();
               
               if (labelText.includes(searchTerm) || apiNameText.includes(searchTerm)) {
                   row.style.display = '';
@@ -272,12 +302,16 @@ async function fetchUserPermissions(domain, sessionId, userName, selectedObject)
             }
         }
 
-        fieldSourceData.get(fieldName).push({ 
-            name: sourceName, 
-            isProfile: record.Parent.IsOwnedByProfile,
-            read: record.PermissionsRead, 
-            edit: record.PermissionsEdit 
-        });
+        // --- NEW: Prevent Duplicate Sources ---
+        const existingSources = fieldSourceData.get(fieldName);
+        if (!existingSources.some(s => s.name === sourceName)) {
+            existingSources.push({ 
+                name: sourceName, 
+                isProfile: record.Parent.IsOwnedByProfile,
+                read: record.PermissionsRead, 
+                edit: record.PermissionsEdit 
+            });
+        }
       }
     }
 
@@ -299,12 +333,14 @@ async function fetchUserPermissions(domain, sessionId, userName, selectedObject)
     const fieldList = Array.from(effectiveFieldPerms.keys()).sort();
     
     // --- NEW: Add Field Label Column to Header ---
+    // --- NEW: 5-Column Table with Strict Widths ---
     let fieldHtml = '<table id="field-table">';
     fieldHtml += `<thead><tr>
-        <th>Field Label</th>
-        <th>API Name</th>
-        <th>Read</th>
-        <th>Edit</th>
+        <th style="width: 55px;"></th>
+        <th style="width: 35%;">Field Label</th>
+        <th style="width: 40%;">API Name</th>
+        <th style="width: 65px; text-align: center;">Read</th>
+        <th style="width: 65px; text-align: center;">Edit</th>
     </tr></thead><tbody>`;
     
     for (const fieldName of fieldList) {
@@ -312,21 +348,22 @@ async function fetchUserPermissions(domain, sessionId, userName, selectedObject)
       const metadata = fieldMetadataMap.get(fieldName);
       
       const isEditModifiable = metadata ? metadata.isUpdateable : true;
-      const displayLabel = metadata && metadata.label ? metadata.label : fieldName; // Fallback to API name if no label found
+      const displayLabel = metadata && metadata.label ? metadata.label : fieldName; 
       
       const setupId = fieldIdMap.get(fieldName) || fieldName;
       const fieldSetupUrl = `${domain}/lightning/setup/ObjectManager/${selectedObject}/FieldsAndRelationships/${setupId}/view`;
       
-      // --- NEW: Render Label in first column, API Name in second ---
       fieldHtml += `<tr>
         <td>
-            <a href="${fieldSetupUrl}" target="_blank" class="icon-action setup-gear" title="Open in Setup">⚙️</a>
-            <span class="source-hover-trigger icon-action source-info" data-field="${fieldName}" title="View Permission Source">ℹ️</span>
-            <strong>${displayLabel}</strong> 
+            <div class="action-cell">
+                <a href="${fieldSetupUrl}" target="_blank" class="icon-action" title="Open in Setup">${gearSVG}</a>
+                <span class="source-hover-trigger icon-action" data-field="${fieldName}" title="View Permission Source">${infoSVG}</span>
+            </div>
         </td>
-        <td style="color:#666; font-family:monospace; font-size:12px;">${fieldName}</td>
-        <td>${createCheckbox(perms.Read, true)}</td>
-        <td>${createCheckbox(perms.Edit, isEditModifiable)}</td>
+        <td><strong>${displayLabel}</strong></td>
+        <td class="api-name-cell">${fieldName}</td>
+        <td style="text-align: center;">${createCheckbox(perms.Read, true)}</td>
+        <td style="text-align: center;">${createCheckbox(perms.Edit, isEditModifiable)}</td>
       </tr>`;
     }
     fieldHtml += '</tbody></table>';
